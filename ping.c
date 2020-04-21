@@ -10,40 +10,48 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <time.h>
 
 #define HOSTLEN 256
 #define SERVLEN 8
 #define SINGLE_PROTOCOL 0
 #define MAXLINE 64
-
+#define MAX_IP_LEN (65536)
+#define IP_PKT_SIZE (20)
 /* Typedef for convenience */
 typedef struct sockaddr SA;
 
 /* Structure of an ICMP packet */
-typedef struct {
+typedef struct __attribute__ ((packed)){
     uint8_t type;
     uint8_t code;
     uint16_t checksum;
     uint16_t ID;
     uint16_t sequence;
-    time_t timestamp;
+    struct timeval timestamp;
     char data[56];
 } ICMP;
 
 
-uint16_t get_checksum(void*, int);
+static uint16_t get_checksum(void*, int);
+static void do_ping();
 
 int main(int argc, char** argv) {
     // Ignore SIGPIPE
     signal(SIGPIPE, SIG_IGN);
-
-    /* Gotta implement appropriate signal handling for SIGINT */
 
     /* Check command line args */
     if (argc != 2) {
         fprintf(stderr, "usage: %s <address>\n", argv[0]);
         exit(1);
     }
+
+    do_ping(argv[1]);
+
+    return 0;
+}
+
+static void do_ping(char *host){
 
     // Get the addressig information
     struct addrinfo addr_info;
@@ -55,11 +63,14 @@ int main(int argc, char** argv) {
     addr_info.ai_canonname = NULL;
     addr_info.ai_next = NULL;
     addr_info.ai_addr = NULL;
-    int ret = getaddrinfo(argv[1], NULL, &addr_info, &res_info);
-    if(ret < 0) { printf("ERROR in getaddrinfo\n"); }
-    if(res_info == NULL) { printf("ERROR in getaddrinfo\n"); }
+    
+    if(getaddrinfo(host, NULL, &addr_info, &res_info) < 0 ) {
+      printf("ERROR in getaddrinfo\n"); 
+    }
+    if(!res_info) { 
+      printf("ERROR in getaddrinfo\n"); 
+    }
 
-    printf("The address is : %s, the protocol is %d\n", argv[1], res_info->ai_protocol);
     // Open a connection
     int sockfd;
     sockfd = socket(res_info->ai_family, res_info->ai_socktype, res_info->ai_protocol); // Err handling reqd
@@ -67,60 +78,71 @@ int main(int argc, char** argv) {
       printf("ERROR in socket %d\n", errno);
     }
 
-    struct timeval time;
+    struct timeval tx_time;
 
-    int bytes;
-    // Send a ping packet to the server
-    ICMP *tx_packet = (ICMP*)malloc(sizeof(ICMP));
-    memset(tx_packet, 0, sizeof(ICMP));
-    //memset(tx_packet->padding, 0, sizeof(tx_packet->padding));
-    if(gettimeofday(&time, NULL) < 0){
-      printf("Error in getting time");
+    int cnt = 0;
+    while(1){
+      // Send a ping packet to the server
+      ICMP *tx_packet = (ICMP*)malloc(sizeof(ICMP));
+      memset(tx_packet, 0, sizeof(ICMP));
+      tx_packet->type = 0x8;
+      tx_packet->code = 0x0; // ECHO REQUEST format
+      tx_packet->ID = 0;
+      tx_packet->sequence = cnt++;
+      if(gettimeofday(&tx_time, NULL) < 0){
+        printf("Error in getting time");
+      }
+      printf("setting time as :: %ld\n", tx_time.tv_usec);
+
+      memcpy(&tx_packet->timestamp, &tx_time, sizeof(tx_time));
+
+      tx_packet->checksum = get_checksum(tx_packet, sizeof(ICMP));
+
+      int optval = 64;
+      setsockopt(sockfd, IPPROTO_IP, IP_TTL, &optval, sizeof(optval));
+
+      uint8_t* rx_buffer = malloc(MAX_IP_LEN);
+      if(sendto(sockfd, tx_packet, sizeof(ICMP), 0, res_info->ai_addr, res_info->ai_addrlen) < 0){
+        fprintf(stderr, "%s\n", strerror(errno)); 
+      }
+      else { 
+        int rx_len = recvfrom(sockfd, rx_buffer, MAX_IP_LEN, 0, NULL, NULL);
+        struct timeval rx_time;
+        if(gettimeofday(&rx_time, NULL) < 0){
+          printf("Error in getting time");
+        }
+
+        struct packet *ip_packet = (struct packet*)rx_buffer;
+        ICMP *rx_packet = (ICMP*)(rx_buffer + IP_PKT_SIZE);//get the icmp packet and ignore the IP packet
+
+        printf("rtt : %ld uSec\n", (rx_time.tv_usec - rx_packet->timestamp.tv_usec));
+
+        printf("type in reply : %d\n", rx_packet->type);
+        printf("time in reply : %ld\n", rx_packet->timestamp.tv_usec);
+        printf("current time  : %ld\n", rx_time.tv_usec);
+      }
     }
-    printf("setting time as :: %ld", time.tv_sec);
-    tx_packet->timestamp = time.tv_sec;
-    //memset(tx_packet->padding, 0, sizeof(tx_packet->padding));
-    tx_packet->type = 0x8;
-    tx_packet->code = 0x0; // ECHO REQUEST format
-    tx_packet->ID = 0;
-    tx_packet->sequence = 0;
-    tx_packet->checksum = get_checksum(tx_packet, sizeof(ICMP));
-
-    int optval = 64;
-    uint8_t* rx_buffer = malloc(65536);
-    setsockopt(sockfd, IPPROTO_IP, IP_TTL, &optval, sizeof(optval));
-    bytes = sendto(sockfd, tx_packet, sizeof(ICMP), 0, res_info->ai_addr, res_info->ai_addrlen);
-    if(bytes < 0) { fprintf(stderr, "%s\n", strerror(errno)); }
-    else { 
-      //ICMP *rx_packet = (ICMP*)malloc(sizeof(ICMP));
-      printf("bytes sent : %d\n", bytes); 
-      int rx_len = recvfrom(sockfd, rx_buffer, 65536, 0, NULL, NULL);
-      struct iphdr *ip_packet = (struct iphdr*)rx_buffer;
-      ICMP *rx_packet = (ICMP*)(rx_buffer + sizeof(struct iphdr*) + 12); 
-      printf("bytes rxed %d\n", rx_len);
-      printf("type in reply : %d\n", rx_packet->type);
-      printf("time in reply : %ld\n", rx_packet->timestamp);
-    }
-
     close(sockfd);
     freeaddrinfo(res_info);
 
-    return 0;
 }
 
 //https://www.csee.usf.edu/~kchriste/tools/checksum.c
-uint16_t get_checksum(void* buf, int size) {
+static uint16_t get_checksum(void* buf, int size) {
     uint16_t* msg = (uint16_t*) buf;
+    uint32_t sum = 0;
     uint16_t checksum = 0;
-    while(size){
-      checksum += *msg;
+    printf("size is %d\n", size);
+    while(size > 1){
+      sum += *msg;
       msg++;
       size -= 2;
     }
-    printf("checksum is %x\n", checksum);
-    printf("checksum is %x\n", ~checksum);
-    //checksum = ((checksum & 0xff) << 8)| ((checksum>>8) &0xff);
-    //checksum = htons(checksum);
-    printf("checksum is %x\n", ~checksum);
-    return ~checksum;
+
+    sum = (sum >> 16) + (sum & 0xffff);
+    sum += (sum >> 16);
+    printf("checksum is %x\n", sum);
+    printf("checksum is %x\n", ~sum);
+    checksum = ~sum;
+    return checksum;
 }
