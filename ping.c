@@ -1,4 +1,16 @@
-/* Enter description of program */
+/* Ping: Sends ICMP echo requests to host
+
+    brief: -makes use of raw sockets
+           -features count of messages to be sent, by default infinite()
+           -features interval between echo requests, default is 1 sec
+           -features timeout for response, default is 200 
+
+    Usage: sudo ./ping <address/hostname> [-c count] [-i interval(secs)] [-W timeout(mSecs)]
+
+    NOTE: needs sudo privilages
+
+  Author: Amol Kulkarni - amolkulk@andrew.cmu.edu
+*/
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -10,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netdb.h>
 #include <time.h>
 
@@ -20,6 +33,7 @@
 #define MAX_IP_LEN (65536)
 #define IP_PKT_SIZE (20)
 #define ICMP_ECHO_REQ_TYPE (8)
+#define MS_TO_US (1000)
 
 
 /* Structure of an ICMP packet */
@@ -34,8 +48,10 @@ typedef struct __attribute__ ((packed)){
 } icmp_packet;
 
 static uint32_t pkt_count = 0;
+static uint32_t interval = 1; //1 sec interval between each echo request
+static uint32_t timeout = 200; //200 mSec interval timeout to wait for response
 static uint32_t pkts_sent = 0;
-static uint32_t pkts_recvd = 0;
+static uint32_t pkts_lost = 0;
 static bool is_count_given = false;
 
 /* static helper functions */
@@ -47,16 +63,8 @@ static void usage();
 brief: signal handler for ctrl-c, print stats and terminate
 */
 void sigint_handler(int sig) {
-  printf(" Total Packets Sent %d\n", pkts_sent);
+  printf(" Total Packets Sent %d Packets lost %d\n", pkts_sent, pkts_lost);
   exit(-1);
-  /*sigset_t mask_all, prev_all;
-
-  sigfillset(&mask_all);
-
-  sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-  printf(" Total Packets Sent %d\n", pkts_sent);
-  sigprocmask(SIG_SETMASK, &prev_all, NULL);
-  exit(-1);*/
 }
 
 
@@ -69,12 +77,19 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         usage();
     }
-    while((c = getopt(argc, argv, ":c:")) != -1) {
+    while((c = getopt(argc, argv, ":c:i:W:")) != -1) {
       switch(c) {
         case 'c':
           pkt_count = atoi(optarg);
           is_count_given = true;
           break;
+        case 'i':
+          interval = atoi(optarg);
+          break;
+        case 'W':
+          timeout = atoi(optarg);
+          break;
+
         case '?':
           usage();
       }
@@ -118,19 +133,27 @@ static void do_ping(char *host){
       printf("ERROR in socket %d\n", errno);
     }
 
+    struct timeval resp_timeout;
+    resp_timeout.tv_sec = 0;
+    resp_timeout.tv_usec = timeout*MS_TO_US;
+
     struct timeval tx_time;
 
     icmp_packet *tx_packet = (icmp_packet*)malloc(sizeof(icmp_packet));
     uint8_t* rx_buffer = malloc(MAX_IP_LEN);
+    fd_set sockfds;;
+    FD_ZERO(&sockfds);
+    FD_SET(sockfd, &sockfds);
+
     while(1){
       // Init the packet to be sent
       memset(tx_packet, 0, sizeof(icmp_packet));
       tx_packet->type = ICMP_ECHO_REQ_TYPE;
       tx_packet->code = 0x0; // ECHO REQUEST format
       tx_packet->ID = 0;
-      tx_packet->sequence = pkts_sent++;
+      tx_packet->sequence = pkts_sent;
 
-      if( is_count_given && pkts_sent > pkt_count){
+      if( is_count_given && pkts_sent >= pkt_count){
         break;
       }
       if(gettimeofday(&tx_time, NULL) < 0){
@@ -142,33 +165,41 @@ static void do_ping(char *host){
 
       tx_packet->checksum = get_checksum(tx_packet, sizeof(icmp_packet));
 
-      int optval = 64;
-      setsockopt(sockfd, IPPROTO_IP, IP_TTL, &optval, sizeof(optval));
+      setsockopt(sockfd, IPPROTO_IP, SO_RCVTIMEO, &resp_timeout, sizeof(resp_timeout));
 
       if(sendto(sockfd, tx_packet, sizeof(icmp_packet), 0, res_info->ai_addr, res_info->ai_addrlen) < 0){
         fprintf(stderr, "%s\n", strerror(errno));
         exit(-1);
       }
-      else { 
-        if( recvfrom(sockfd, rx_buffer, MAX_IP_LEN, 0, NULL, NULL) < 0){
-          printf("Unable to receive packet\n");
+      else {
+        pkts_sent++;
+        if(select(32, &sockfds, NULL, NULL, &resp_timeout) == 0){
+          printf("Timed out waiting for packet : %d\n", pkts_sent);
+          pkts_lost++;
           continue;
         }
-        else {
-          struct timeval rx_time;
-          if(gettimeofday(&rx_time, NULL) < 0){
-            printf("Error in getting time");
+        else{
+          if( recvfrom(sockfd, rx_buffer, MAX_IP_LEN, 0, NULL, NULL) < 0){
+            printf("Unable to receive packet\n");
             exit(-1);
           }
+          else {
+            struct timeval rx_time;
+            if(gettimeofday(&rx_time, NULL) < 0){
+              printf("Error in getting time");
+              exit(-1);
+            }
 
-          icmp_packet *rx_packet = (icmp_packet*)(rx_buffer + IP_PKT_SIZE);//get the icmp packet and ignore the IP packet
+            icmp_packet *rx_packet = (icmp_packet*)(rx_buffer + IP_PKT_SIZE);//get the icmp packet and ignore the IP packet
 
-          double diff_time = (float)(rx_time.tv_usec - rx_packet->timestamp.tv_usec)/(float)1000;
-          printf("Echo Reply received from %s rtt : %f mSec\n", host, diff_time);
-          sleep(1);
+            double diff_time = (float)(rx_time.tv_usec - rx_packet->timestamp.tv_usec)/(float)1000;
+            printf("Echo Reply received from %s rtt : %f mSec\n", host, diff_time);
+            sleep(interval);
+          }
         }
       }
     }
+    printf(" Total Packets Sent %d Packets lost %d\n", pkts_sent, pkts_lost);
     free(rx_buffer);
     free(tx_packet);
     close(sockfd);
@@ -206,6 +237,6 @@ static uint16_t get_checksum(void* buf, int size) {
 brief: show the right usage & possible options
 */
 static void usage(){
-    fprintf(stderr, "usage: sudo ./ping <address/hostname> [-c count] \n");
+    fprintf(stderr, "usage: sudo ./ping <address/hostname> [-c count] [-i interval(secs)] [-W timeout(mSecs)] \n");
     exit(-1);
 }
