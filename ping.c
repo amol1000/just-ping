@@ -63,7 +63,7 @@ static void usage();
 brief: signal handler for ctrl-c, print stats and terminate
 */
 void sigint_handler(int sig) {
-  printf(" Total Packets Sent %d Packets lost %d\n", pkts_sent, pkts_lost);
+  printf(" Total Packets Sent: %d \t Packets lost: %d\n", pkts_sent, pkts_lost);
   exit(-1);
 }
 
@@ -75,7 +75,11 @@ int main(int argc, char** argv) {
 
     /* Check command line args */
     if (argc < 2) {
-        usage();
+      usage();
+    }
+    if(getuid() != 0){
+      printf("Need root permissions\n");
+      usage();
     }
     while((c = getopt(argc, argv, ":c:i:W:")) != -1) {
       switch(c) {
@@ -108,6 +112,7 @@ brief:  Send echo requests to the geiven host & check for echo reponse
 */
 static void do_ping(char *host){
 
+    printf("Sending ping echo request to %s\n", host);
     // Get the addressig information
     struct addrinfo addr_info;
     struct addrinfo *res_info;
@@ -119,7 +124,7 @@ static void do_ping(char *host){
     addr_info.ai_next = NULL;
     addr_info.ai_addr = NULL;
     
-    if(getaddrinfo(host, NULL, &addr_info, &res_info) < 0 ) {
+    if(getaddrinfo(host, NULL, &addr_info, &res_info) != 0 ) {
       printf("ERROR in getaddrinfo\n"); 
     }
     if(!res_info) { 
@@ -173,12 +178,14 @@ static void do_ping(char *host){
       }
       else {
         pkts_sent++;
+        // wait for timeout
         if(select(32, &sockfds, NULL, NULL, &resp_timeout) == 0){
           printf("Timed out waiting for packet : %d\n", pkts_sent);
           pkts_lost++;
           continue;
         }
         else{
+          // read from socket
           if( recvfrom(sockfd, rx_buffer, MAX_IP_LEN, 0, NULL, NULL) < 0){
             printf("Unable to receive packet\n");
             exit(-1);
@@ -190,10 +197,11 @@ static void do_ping(char *host){
               exit(-1);
             }
 
-            icmp_packet *rx_packet = (icmp_packet*)(rx_buffer + IP_PKT_SIZE);//get the icmp packet and ignore the IP packet
+            //get the icmp packet and ignore the IP packet
+            icmp_packet *rx_packet = (icmp_packet*)(rx_buffer + IP_PKT_SIZE);
 
             double diff_time = (float)(rx_time.tv_usec - rx_packet->timestamp.tv_usec)/(float)1000;
-            printf("Echo Reply received from %s rtt : %f mSec\n", host, diff_time);
+            printf("Echo Reply received from %s (RTT : %f mSec)\n", host, diff_time);
             sleep(interval);
           }
         }
