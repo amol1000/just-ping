@@ -26,7 +26,8 @@ typedef struct {
     uint16_t checksum;
     uint16_t ID;
     uint16_t sequence;
-    char padding[56];
+    time_t timestamp;
+    char data[56];
 } ICMP;
 
 
@@ -66,10 +67,18 @@ int main(int argc, char** argv) {
       printf("ERROR in socket %d\n", errno);
     }
 
+    struct timeval time;
+
     int bytes;
     // Send a ping packet to the server
-    ICMP *tx_packet;
+    ICMP *tx_packet = (ICMP*)malloc(sizeof(ICMP));
     memset(tx_packet, 0, sizeof(ICMP));
+    //memset(tx_packet->padding, 0, sizeof(tx_packet->padding));
+    if(gettimeofday(&time, NULL) < 0){
+      printf("Error in getting time");
+    }
+    printf("setting time as :: %ld", time.tv_sec);
+    tx_packet->timestamp = time.tv_sec;
     //memset(tx_packet->padding, 0, sizeof(tx_packet->padding));
     tx_packet->type = 0x8;
     tx_packet->code = 0x0; // ECHO REQUEST format
@@ -78,15 +87,19 @@ int main(int argc, char** argv) {
     tx_packet->checksum = get_checksum(tx_packet, sizeof(ICMP));
 
     int optval = 64;
+    uint8_t* rx_buffer = malloc(65536);
     setsockopt(sockfd, IPPROTO_IP, IP_TTL, &optval, sizeof(optval));
-
     bytes = sendto(sockfd, tx_packet, sizeof(ICMP), 0, res_info->ai_addr, res_info->ai_addrlen);
     if(bytes < 0) { fprintf(stderr, "%s\n", strerror(errno)); }
     else { 
-      ICMP *rx_packet = (ICMP*)malloc(sizeof(ICMP));
+      //ICMP *rx_packet = (ICMP*)malloc(sizeof(ICMP));
       printf("bytes sent : %d\n", bytes); 
-      int rx_len = recvfrom(sockfd, rx_packet, sizeof(rx_packet), 0, NULL, NULL);
+      int rx_len = recvfrom(sockfd, rx_buffer, 65536, 0, NULL, NULL);
+      struct iphdr *ip_packet = (struct iphdr*)rx_buffer;
+      ICMP *rx_packet = (ICMP*)(rx_buffer + sizeof(struct iphdr*) + 12); 
       printf("bytes rxed %d\n", rx_len);
+      printf("type in reply : %d\n", rx_packet->type);
+      printf("time in reply : %ld\n", rx_packet->timestamp);
     }
 
     close(sockfd);
@@ -95,6 +108,7 @@ int main(int argc, char** argv) {
     return 0;
 }
 
+//https://www.csee.usf.edu/~kchriste/tools/checksum.c
 uint16_t get_checksum(void* buf, int size) {
     uint16_t* msg = (uint16_t*) buf;
     uint16_t checksum = 0;
