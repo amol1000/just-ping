@@ -32,21 +32,31 @@ typedef struct __attribute__ ((packed)){
     char data[56];
 } ICMP;
 
-
+static uint16_t pkt_count;
 static uint16_t get_checksum(void*, int);
 static void do_ping();
 
 int main(int argc, char** argv) {
     // Ignore SIGPIPE
     signal(SIGPIPE, SIG_IGN);
+    int c;
 
-    /* Check command line args */
-    if (argc != 2) {
+    if (argc < 2) {
         fprintf(stderr, "usage: %s <address>\n", argv[0]);
         exit(1);
     }
+    while((c = getopt(argc, argv, ":c:")) != -1) {
+      switch(c) {
+        case 'c':
+          pkt_count = atoi(optarg);
+          break;
+      }
+    }
 
-    do_ping(argv[1]);
+    /* Check command line args */
+
+
+    do_ping(argv[optind]);
 
     return 0;
 }
@@ -89,10 +99,13 @@ static void do_ping(char *host){
       tx_packet->code = 0x0; // ECHO REQUEST format
       tx_packet->ID = 0;
       tx_packet->sequence = cnt++;
+
+      if(cnt > pkt_count){
+        break;
+      }
       if(gettimeofday(&tx_time, NULL) < 0){
         printf("Error in getting time");
       }
-      printf("setting time as :: %ld\n", tx_time.tv_usec);
 
       memcpy(&tx_packet->timestamp, &tx_time, sizeof(tx_time));
 
@@ -115,11 +128,8 @@ static void do_ping(char *host){
         struct packet *ip_packet = (struct packet*)rx_buffer;
         ICMP *rx_packet = (ICMP*)(rx_buffer + IP_PKT_SIZE);//get the icmp packet and ignore the IP packet
 
-        printf("rtt : %ld uSec\n", (rx_time.tv_usec - rx_packet->timestamp.tv_usec));
-
-        printf("type in reply : %d\n", rx_packet->type);
-        printf("time in reply : %ld\n", rx_packet->timestamp.tv_usec);
-        printf("current time  : %ld\n", rx_time.tv_usec);
+        printf("Echo Reply received from %s rtt : %ld uSec\n", host, (rx_time.tv_usec - rx_packet->timestamp.tv_usec));
+        sleep(1);
       }
     }
     close(sockfd);
@@ -132,7 +142,6 @@ static uint16_t get_checksum(void* buf, int size) {
     uint16_t* msg = (uint16_t*) buf;
     uint32_t sum = 0;
     uint16_t checksum = 0;
-    printf("size is %d\n", size);
     while(size > 1){
       sum += *msg;
       msg++;
@@ -141,8 +150,6 @@ static uint16_t get_checksum(void* buf, int size) {
 
     sum = (sum >> 16) + (sum & 0xffff);
     sum += (sum >> 16);
-    printf("checksum is %x\n", sum);
-    printf("checksum is %x\n", ~sum);
     checksum = ~sum;
     return checksum;
 }
