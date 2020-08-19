@@ -145,7 +145,14 @@ static void do_ping(char *host){
     struct timeval tx_time;
 
     icmp_packet *tx_packet = (icmp_packet*)malloc(sizeof(icmp_packet));
+    if(!icmp_packet){
+        printf("Error in mallocing memory for icmp packet\n");
+    }
     uint8_t* rx_buffer = malloc(MAX_IP_LEN);
+    if(!rx_buffer){
+        printf("Error in mallocing memory for rx_buffer\n");
+    }
+
     fd_set sockfds;;
     FD_ZERO(&sockfds);
     FD_SET(sockfd, &sockfds);
