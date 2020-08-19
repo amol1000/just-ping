@@ -125,17 +125,20 @@ static void do_ping(char *host){
     addr_info.ai_addr = NULL;
     
     if(getaddrinfo(host, NULL, &addr_info, &res_info) != 0 ) {
-      printf("ERROR in getaddrinfo\n"); 
+        printf("ERROR in getaddrinfo\n");
+        exit(-1);
     }
     if(!res_info) { 
-      printf("ERROR in getaddrinfo\n"); 
+        printf("ERROR in getaddrinfo\n"); 
+        exit(-1);
     }
 
     // Open a connection
     int sockfd;
-    sockfd = socket(res_info->ai_family, res_info->ai_socktype, res_info->ai_protocol); // Err handling reqd
+    sockfd = socket(res_info->ai_family, res_info->ai_socktype, res_info->ai_protocol);
     if(sockfd < 0) { 
-      printf("ERROR in socket %d\n", errno);
+        printf("ERROR in socket %d\n", errno);
+        exit(-1);
     }
 
     struct timeval resp_timeout;
@@ -147,10 +150,12 @@ static void do_ping(char *host){
     icmp_packet *tx_packet = (icmp_packet*)malloc(sizeof(icmp_packet));
     if(!icmp_packet){
         printf("Error in mallocing memory for icmp packet\n");
+        exit(-1);
     }
     uint8_t* rx_buffer = malloc(MAX_IP_LEN);
     if(!rx_buffer){
         printf("Error in mallocing memory for rx_buffer\n");
+        exit(-1);
     }
 
     fd_set sockfds;;
